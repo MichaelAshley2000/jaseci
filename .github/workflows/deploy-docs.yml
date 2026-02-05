@@ -81,7 +81,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python3 scripts/top_voices.py > docs/community/top_voices.md
+          jac run scripts/top_voices.jac > docs/community/top_voices.md
 
       # Configure AWS credentials
       - name: Configure AWS Credentials
