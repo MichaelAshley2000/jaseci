@@ -17,6 +17,8 @@ on:
 permissions:
   id-token: write
   contents: read
+  issues: read
+  pull-requests: read
 
 jobs:
   deploy-jac-lang-website:
@@ -27,6 +29,8 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      issues: read
+      pull-requests: read
 
     defaults:
       run:
@@ -71,6 +75,13 @@ jobs:
           pip install -e ../jac
           # Install docs dependencies
           pip install -e .
+
+      # Generate top voices data (gh is preinstalled on GitHub-hosted runners)
+      - name: Generate top voices data
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/top_voices.py > docs/community/top_voices.md
 
       # Configure AWS credentials
       - name: Configure AWS Credentials
