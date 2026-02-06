@@ -52,41 +52,31 @@ def paginated_api(endpoint: str) -> list[dict] {
             break;
         }
         data = loads(result.stdout.decode('utf-8'));
-        if len(data) == 0 {
+        if not data {
             break;
         }
-        for item in data {
-            items.append(item);
-        }
+        items.extend(data);
         if len(data) < PER_PAGE {
             break;
         }
-        page = page + 1;
+        page += 1;
     }
     return items;
 }
 
 def fetch_comments(since_date: str) -> list[VoiceEntry] {
     comments = [];
-
-    for item in paginated_api(f"/repos/{REPO}/issues/comments?since={since_date}") {
-        if not is_bot(item.get("user", {})) {
-            comments.append(VoiceEntry(
-                author=item["user"].get("login", "unknown"),
-                date=item.get("created_at", "")
-            ));
+    for endpoint in [f"/repos/{REPO}/issues/comments?since={since_date}",
+                     f"/repos/{REPO}/pulls/comments?since={since_date}"] {
+        for item in paginated_api(endpoint) {
+            if not is_bot(item.get("user", {})) {
+                comments.append(VoiceEntry(
+                    author=item["user"].get("login", "unknown"),
+                    date=item.get("created_at", "")
+                ));
+            }
         }
     }
-
-    for item in paginated_api(f"/repos/{REPO}/pulls/comments?since={since_date}") {
-        if not is_bot(item.get("user", {})) {
-            comments.append(VoiceEntry(
-                author=item["user"].get("login", "unknown"),
-                date=item.get("created_at", "")
-            ));
-        }
-    }
-
     return comments;
 }
 
@@ -192,11 +182,9 @@ def process_voices(
 ) -> list[VoiceStats] {
     since_date = (datetime.now(timezone.utc) - timedelta(days=days)).replace(tzinfo=None);
 
-    # Voice data structure per username
     voices: dict[str, dict] = {};
     all_usernames: list[str] = [];
 
-    # Process comments
     for item in comments {
         try {
             date = datetime.fromisoformat(item.date.replace("Z", "+00:00")).replace(tzinfo=None);
@@ -217,18 +205,12 @@ def process_voices(
         }
 
         if author not in voices {
-            voices[author] = {
-                "comments": 0,
-                "reviews": 0,
-                "issues": 0,
-                "active_days": set()
-            };
+            voices[author] = {"comments": 0, "reviews": 0, "issues": 0, "active_days": set()};
         }
-        voices[author]["comments"] = voices[author]["comments"] + 1;
+        voices[author]["comments"] += 1;
         voices[author]["active_days"].add(date.date());
     }
 
-    # Process reviews
     for item in reviews {
         try {
             date = datetime.fromisoformat(item.date.replace("Z", "+00:00")).replace(tzinfo=None);
@@ -249,18 +231,12 @@ def process_voices(
         }
 
         if author not in voices {
-            voices[author] = {
-                "comments": 0,
-                "reviews": 0,
-                "issues": 0,
-                "active_days": set()
-            };
+            voices[author] = {"comments": 0, "reviews": 0, "issues": 0, "active_days": set()};
         }
-        voices[author]["reviews"] = voices[author]["reviews"] + 1;
+        voices[author]["reviews"] += 1;
         voices[author]["active_days"].add(date.date());
     }
 
-    # Process issues
     for item in issues {
         try {
             date = datetime.fromisoformat(item.date.replace("Z", "+00:00")).replace(tzinfo=None);
@@ -281,18 +257,11 @@ def process_voices(
         }
 
         if author not in voices {
-            voices[author] = {
-                "comments": 0,
-                "reviews": 0,
-                "issues": 0,
-                "active_days": set()
-            };
+            voices[author] = {"comments": 0, "reviews": 0, "issues": 0, "active_days": set()};
         }
-        voices[author]["issues"] = voices[author]["issues"] + 1;
+        voices[author]["issues"] += 1;
         voices[author]["active_days"].add(date.date());
     }
-
-    print("Fetching names for " + str(len(all_usernames)) + " users...");
 
     real_names = fetch_real_names(all_usernames);
 
@@ -317,7 +286,6 @@ def process_voices(
         ));
     }
 
-    # Sort by total descending (bubble sort)
     for i in range(len(results)) {
         for j in range(i + 1, len(results)) {
             if results[j].total > results[i].total {
@@ -333,26 +301,20 @@ def process_voices(
 
 def generate_html_table(voices: list[VoiceStats], days: int) -> str {
     if len(voices) == 0 {
-        return "<p>No discussion activity found in the last " + str(days) + " days.</p>";
+        return f"<p>No discussion activity found in the last {days} days.</p>";
     }
 
     end_date = datetime.now(timezone.utc).date();
     start_date = end_date - timedelta(days=days);
 
     lines = [];
-    lines.append("<h3>Top voices in the last " + str(days) + " days (" +
-                 start_date.strftime('%Y-%m-%d') + " to " +
-                 end_date.strftime('%Y-%m-%d') + ")</h3>");
+    lines.append(f"<h3>Top voices in the last {days} days ({start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')})</h3>");
     lines.append("<table>");
     lines.append("<thead><tr><th>Voice</th><th>Comments</th><th>Reviews</th><th>Issues</th><th>Active Days</th></tr></thead>");
     lines.append("<tbody>");
 
     for voice in voices {
-        lines.append("<tr><td>" + voice.name + "</td><td>" +
-                     str(voice.comments) + "</td><td>" +
-                     str(voice.reviews) + "</td><td>" +
-                     str(voice.issues) + "</td><td>" +
-                     str(voice.active_days) + "</td></tr>");
+        lines.append(f"<tr><td>{voice.name}</td><td>{voice.comments}</td><td>{voice.reviews}</td><td>{voice.issues}</td><td>{voice.active_days}</td></tr>");
     }
     lines.append("</tbody></table>");
     return "\n".join(lines);
@@ -447,25 +409,16 @@ def main(days_arg: int = None) {
             periods.append(p);
         }
     }
-    if len(periods) == 0 {
+    if not periods {
         return;
     }
 
-    max_days = 0;
-    for p in periods {
-        if p > max_days {
-            max_days = p;
-        }
-    }
+    max_days = max(periods);
     since_date = (datetime.now(timezone.utc) - timedelta(days=max_days)).strftime("%Y-%m-%dT%H:%M:%SZ");
-
-    print("Fetching discussion data since " + since_date + "...");
 
     comments = fetch_comments(since_date);
     reviews = fetch_reviews(since_date);
     issues = fetch_issues(since_date);
-
-    print("Found " + str(len(comments)) + " comments, " + str(len(reviews)) + " reviews, " + str(len(issues)) + " issues");
 
     html = [];
     html.append(get_table_css());
@@ -480,10 +433,4 @@ def main(days_arg: int = None) {
     print("\n".join(html));
 }
 
-with entry {
-    # Parse command line arguments
-    days_override = None;
-    # Note: Jac CLI argument handling may vary
-    # You can pass --days argument when running via jac CLI
-    main(days_arg=days_override);
-}
+with entry { main(); }

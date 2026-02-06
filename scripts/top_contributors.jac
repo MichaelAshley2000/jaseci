@@ -17,7 +17,6 @@ obj Contributor {
 }
 
 def get_commits_from_git(days: int) -> list[Commit] {
-    # """Get commits from local git repository for the specified number of days."""
     since_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d");
 
     cmd = [
@@ -54,8 +53,6 @@ def get_commits_from_git(days: int) -> list[Commit] {
 
 def process_contributors(commits: list[Commit], days: int) -> list[Contributor] {
     since_date = (datetime.now() - timedelta(days=days)).date();
-
-    # Group by email to deduplicate same person with different names
     contributors: dict[str, dict] = {};
     name_counts: dict[str, dict[str, int]] = {};
 
@@ -79,22 +76,15 @@ def process_contributors(commits: list[Commit], days: int) -> list[Contributor] 
                 name_counts[author_email] = {};
             }
 
-            contributors[author_email]["commits"] = contributors[author_email]["commits"] + 1;
+            contributors[author_email]["commits"] += 1;
             contributors[author_email]["active_days"].add(commit_date);
-
-            if author_name not in name_counts[author_email] {
-                name_counts[author_email][author_name] = 0;
-            }
-            name_counts[author_email][author_name] = name_counts[author_email][author_name] + 1;
+            name_counts[author_email][author_name] = name_counts[author_email].get(author_name, 0) + 1;
         }
     }
 
-    # Use the most frequently used name for each email
     results = [];
     for email in contributors {
         data = contributors[email];
-
-        # Find most common name
         best_name = email;
         max_count = 0;
         for name in name_counts[email] {
@@ -112,7 +102,6 @@ def process_contributors(commits: list[Commit], days: int) -> list[Contributor] 
         ));
     }
 
-    # Sort by commits descending (bubble sort)
     for i in range(len(results)) {
         for j in range(i + 1, len(results)) {
             if results[j].commits > results[i].commits {
@@ -232,20 +221,13 @@ def main(days_arg: int = None) {
             periods.append(p);
         }
     }
-    if len(periods) == 0 {
+    if not periods {
         return;
     }
 
-    # Fetch commits once for the maximum period
-    max_days = 0;
-    for p in periods {
-        if p > max_days {
-            max_days = p;
-        }
-    }
+    max_days = max(periods);
     all_commits = get_commits_from_git(max_days);
 
-    # Generate tables for each period
     html = [];
     html.append(get_tabs_css());
     html.append('<div class="tabcontent">');
@@ -259,10 +241,4 @@ def main(days_arg: int = None) {
     print("\n".join(html));
 }
 
-with entry {
-    # Parse command line arguments
-    days_override = None;
-    # Check if --days argument is provided
-    # Note: Jac CLI argument handling may vary
-    main(days_arg=days_override);
-}
+with entry { main(); }
