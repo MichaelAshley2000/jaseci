@@ -4,26 +4,26 @@ import from datetime { datetime, timedelta, timezone }
 import from subprocess { run, PIPE }
 import from json { loads }
 
-glob REPO = "Jaseci-Labs/jaseci";
-glob PER_PAGE = 100;
-glob MAX_PR_LIMIT = 500;
-glob DEFAULT_PERIODS = [7, 30, 180, 365];
+glob REPO = "Jaseci-Labs/jaseci",
+     PER_PAGE = 100,
+     MAX_PR_LIMIT = 500,
+     DEFAULT_PERIODS = [7, 30, 180, 365];
 
 obj VoiceEntry {
-    has author: str;
-    has date: str;
+    has author: str,
+        date: str;
 }
 
 obj VoiceStats {
-    has name: str;
-    has comments: int;
-    has reviews: int;
-    has issues: int;
-    has active_days: int;
-    has total: int;
+    has name: str,
+        comments: int,
+        reviews: int,
+        issues: int,
+        active_days: int,
+        total: int;
 }
 
-def check_gh_cli() -> bool {
+def check_gh_cli -> bool {
     try {
         result = run(["gh", "auth", "status"], stdout=PIPE, stderr=PIPE);
         return result.returncode == 0;
@@ -66,14 +66,18 @@ def paginated_api(endpoint: str) -> list[dict] {
 
 def fetch_comments(since_date: str) -> list[VoiceEntry] {
     comments = [];
-    for endpoint in [f"/repos/{REPO}/issues/comments?since={since_date}",
-                     f"/repos/{REPO}/pulls/comments?since={since_date}"] {
+    for endpoint in [
+        f"/repos/{REPO}/issues/comments?since={since_date}",
+        f"/repos/{REPO}/pulls/comments?since={since_date}"
+    ] {
         for item in paginated_api(endpoint) {
             if not is_bot(item.get("user", {})) {
-                comments.append(VoiceEntry(
-                    author=item["user"].get("login", "unknown"),
-                    date=item.get("created_at", "")
-                ));
+                comments.append(
+                    VoiceEntry(
+                        author=item["user"].get("login", "unknown"),
+                        date=item.get("created_at", "")
+                    )
+                );
             }
         }
     }
@@ -83,11 +87,17 @@ def fetch_comments(since_date: str) -> list[VoiceEntry] {
 def fetch_reviews(since_date: str) -> list[VoiceEntry] {
     reviews = [];
     cmd = [
-        "gh", "pr", "list",
-        "--repo", f"{REPO}",
-        "--state", "merged",
-        "--limit", f"{MAX_PR_LIMIT}",
-        "--json", "number,updatedAt,mergedAt"
+        "gh",
+        "pr",
+        "list",
+        "--repo",
+        f"{REPO}",
+        "--state",
+        "merged",
+        "--limit",
+        f"{MAX_PR_LIMIT}",
+        "--json",
+        "number,updatedAt,mergedAt"
     ];
     result = run(cmd, stdout=PIPE, stderr=PIPE);
     if result.returncode != 0 {
@@ -116,12 +126,16 @@ def fetch_reviews(since_date: str) -> list[VoiceEntry] {
                 }
                 review_date = review.get("submitted_at", "");
                 if review_date {
-                    review_dt = datetime.fromisoformat(review_date.replace("Z", "+00:00"));
+                    review_dt = datetime.fromisoformat(
+                        review_date.replace("Z", "+00:00")
+                    );
                     if review_dt >= since_dt {
-                        reviews.append(VoiceEntry(
-                            author=review["user"].get("login", "unknown"),
-                            date=review_date
-                        ));
+                        reviews.append(
+                            VoiceEntry(
+                                author=review["user"].get("login", "unknown"),
+                                date=review_date
+                            )
+                        );
                     }
                 }
             }
@@ -132,11 +146,17 @@ def fetch_reviews(since_date: str) -> list[VoiceEntry] {
 
 def fetch_issues(since_date: str) -> list[VoiceEntry] {
     cmd = [
-        "gh", "issue", "list",
-        "--repo", f"{REPO}",
-        "--limit", f"{MAX_PR_LIMIT}",
-        "--search", f"created:>{since_date[:10]}",
-        "--json", "author,createdAt"
+        "gh",
+        "issue",
+        "list",
+        "--repo",
+        f"{REPO}",
+        "--limit",
+        f"{MAX_PR_LIMIT}",
+        "--search",
+        f"created:>{since_date[:10]}",
+        "--json",
+        "author,createdAt"
     ];
     result = run(cmd, stdout=PIPE, stderr=PIPE);
     if result.returncode != 0 {
@@ -146,10 +166,12 @@ def fetch_issues(since_date: str) -> list[VoiceEntry] {
     issues = [];
     for item in loads(result.stdout.decode('utf-8')) {
         if not is_bot(item.get("author", {})) {
-            issues.append(VoiceEntry(
-                author=item["author"].get("login", "unknown"),
-                date=item.get("createdAt", "")
-            ));
+            issues.append(
+                VoiceEntry(
+                    author=item["author"].get("login", "unknown"),
+                    date=item.get("createdAt", "")
+                )
+            );
         }
     }
     return issues;
@@ -180,14 +202,18 @@ def process_voices(
     issues: list[VoiceEntry],
     days: int
 ) -> list[VoiceStats] {
-    since_date = (datetime.now(timezone.utc) - timedelta(days=days)).replace(tzinfo=None);
+    since_date = (datetime.now(timezone.utc) - timedelta(days=days)).replace(
+        tzinfo=None
+    );
 
     voices: dict[str, dict] = {};
     all_usernames: list[str] = [];
 
     for item in comments {
         try {
-            date = datetime.fromisoformat(item.date.replace("Z", "+00:00")).replace(tzinfo=None);
+            date = datetime.fromisoformat(item.date.replace("Z", "+00:00")).replace(
+                tzinfo=None
+            );
             if date < since_date {
                 continue;
             }
@@ -205,7 +231,12 @@ def process_voices(
         }
 
         if author not in voices {
-            voices[author] = {"comments": 0, "reviews": 0, "issues": 0, "active_days": set()};
+            voices[author] = {
+                "comments": 0,
+                "reviews": 0,
+                "issues": 0,
+                "active_days": set()
+            };
         }
         voices[author]["comments"] += 1;
         voices[author]["active_days"].add(date.date());
@@ -213,7 +244,9 @@ def process_voices(
 
     for item in reviews {
         try {
-            date = datetime.fromisoformat(item.date.replace("Z", "+00:00")).replace(tzinfo=None);
+            date = datetime.fromisoformat(item.date.replace("Z", "+00:00")).replace(
+                tzinfo=None
+            );
             if date < since_date {
                 continue;
             }
@@ -231,7 +264,12 @@ def process_voices(
         }
 
         if author not in voices {
-            voices[author] = {"comments": 0, "reviews": 0, "issues": 0, "active_days": set()};
+            voices[author] = {
+                "comments": 0,
+                "reviews": 0,
+                "issues": 0,
+                "active_days": set()
+            };
         }
         voices[author]["reviews"] += 1;
         voices[author]["active_days"].add(date.date());
@@ -239,7 +277,9 @@ def process_voices(
 
     for item in issues {
         try {
-            date = datetime.fromisoformat(item.date.replace("Z", "+00:00")).replace(tzinfo=None);
+            date = datetime.fromisoformat(item.date.replace("Z", "+00:00")).replace(
+                tzinfo=None
+            );
             if date < since_date {
                 continue;
             }
@@ -257,7 +297,12 @@ def process_voices(
         }
 
         if author not in voices {
-            voices[author] = {"comments": 0, "reviews": 0, "issues": 0, "active_days": set()};
+            voices[author] = {
+                "comments": 0,
+                "reviews": 0,
+                "issues": 0,
+                "active_days": set()
+            };
         }
         voices[author]["issues"] += 1;
         voices[author]["active_days"].add(date.date());
@@ -276,14 +321,16 @@ def process_voices(
             continue;
         }
         total = data["comments"] + data["reviews"] + data["issues"];
-        results.append(VoiceStats(
-            name=display_name,
-            comments=data["comments"],
-            reviews=data["reviews"],
-            issues=data["issues"],
-            active_days=len(data["active_days"]),
-            total=total
-        ));
+        results.append(
+            VoiceStats(
+                name=display_name,
+                comments=data["comments"],
+                reviews=data["reviews"],
+                issues=data["issues"],
+                active_days=len(data["active_days"]),
+                total=total
+            )
+        );
     }
 
     for i in range(len(results)) {
@@ -308,19 +355,27 @@ def generate_html_table(voices: list[VoiceStats], days: int) -> str {
     start_date = end_date - timedelta(days=days);
 
     lines = [];
-    lines.append(f"<h3>Top voices in the last {days} days ({start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')})</h3>");
+    lines.append(
+        f"<h3>Top voices in the last {days} days ({start_date.strftime('%Y-%m-%d')} to {end_date.strftime(
+            '%Y-%m-%d'
+        )})</h3>"
+    );
     lines.append("<table>");
-    lines.append("<thead><tr><th>Voice</th><th>Comments</th><th>Reviews</th><th>Issues</th><th>Active Days</th></tr></thead>");
+    lines.append(
+        "<thead><tr><th>Voice</th><th>Comments</th><th>Reviews</th><th>Issues</th><th>Active Days</th></tr></thead>"
+    );
     lines.append("<tbody>");
 
     for voice in voices {
-        lines.append(f"<tr><td>{voice.name}</td><td>{voice.comments}</td><td>{voice.reviews}</td><td>{voice.issues}</td><td>{voice.active_days}</td></tr>");
+        lines.append(
+            f"<tr><td>{voice.name}</td><td>{voice.comments}</td><td>{voice.reviews}</td><td>{voice.issues}</td><td>{voice.active_days}</td></tr>"
+        );
     }
     lines.append("</tbody></table>");
     return "\n".join(lines);
 }
 
-def get_table_css() -> str {
+def get_table_css -> str {
     return """
 <style>
 #tabs {
@@ -396,7 +451,9 @@ def get_table_css() -> str {
 
 def main(days_arg: int = None) {
     if not check_gh_cli() {
-        print("# Top Voices\n\n> GitHub CLI not found or not authenticated. Unable to fetch discussion data.\n");
+        println(
+            "# Top Voices\n\n> GitHub CLI not found or not authenticated. Unable to fetch discussion data.\n"
+        );
         return;
     }
 
@@ -414,7 +471,9 @@ def main(days_arg: int = None) {
     }
 
     max_days = max(periods);
-    since_date = (datetime.now(timezone.utc) - timedelta(days=max_days)).strftime("%Y-%m-%dT%H:%M:%SZ");
+    since_date = (datetime.now(timezone.utc) - timedelta(days=max_days)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    );
 
     comments = fetch_comments(since_date);
     reviews = fetch_reviews(since_date);
@@ -433,4 +492,6 @@ def main(days_arg: int = None) {
     print("\n".join(html));
 }
 
-with entry { main(); }
+with entry {
+    main();
+}

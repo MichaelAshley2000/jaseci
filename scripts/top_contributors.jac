@@ -4,23 +4,24 @@ import from datetime { datetime, timedelta }
 import from subprocess { run, PIPE }
 
 obj Commit {
-    has author_name: str;
-    has author_email: str;
-    has commit_date: str;
+    has author_name: str,
+        author_email: str,
+        commit_date: str;
 }
 
 obj Contributor {
-    has name: str;
-    has email: str;
-    has commits: int;
-    has active_days: int;
+    has name: str,
+        email: str,
+        commits: int,
+        active_days: int;
 }
 
 def get_commits_from_git(days: int) -> list[Commit] {
     since_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d");
 
     cmd = [
-        "git", "log",
+        "git",
+        "log",
         f"--since={since_date}",
         "--pretty=format:%an|%ae|%ad",
         "--date=short"
@@ -37,16 +38,18 @@ def get_commits_from_git(days: int) -> list[Commit] {
             }
             parts = line.split("|");
             if len(parts) == 3 {
-                commits.append(Commit(
-                    author_name=parts[0],
-                    author_email=parts[1],
-                    commit_date=parts[2]
-                ));
+                commits.append(
+                    Commit(
+                        author_name=parts[0],
+                        author_email=parts[1],
+                        commit_date=parts[2]
+                    )
+                );
             }
         }
         return commits;
     } except Exception as e {
-        print(f"Error fetching commits from git: {e}");
+        println(f"Error fetching commits from git: {e}");
         return [];
     }
 }
@@ -66,7 +69,6 @@ def process_contributors(commits: list[Commit], days: int) -> list[Contributor] 
         if commit_date > since_date {
             author_email = commit.author_email;
             author_name = commit.author_name;
-
             if author_email not in contributors {
                 contributors[author_email] = {
                     "commits": 0,
@@ -75,10 +77,11 @@ def process_contributors(commits: list[Commit], days: int) -> list[Contributor] 
                 };
                 name_counts[author_email] = {};
             }
-
             contributors[author_email]["commits"] += 1;
             contributors[author_email]["active_days"].add(commit_date);
-            name_counts[author_email][author_name] = name_counts[author_email].get(author_name, 0) + 1;
+            name_counts[author_email][author_name] = name_counts[author_email].get(
+                author_name, 0
+            ) + 1;
         }
     }
 
@@ -94,12 +97,14 @@ def process_contributors(commits: list[Commit], days: int) -> list[Contributor] 
             }
         }
 
-        results.append(Contributor(
-            name=best_name,
-            email=email,
-            commits=data["commits"],
-            active_days=len(data["active_days"])
-        ));
+        results.append(
+            Contributor(
+                name=best_name,
+                email=email,
+                commits=data["commits"],
+                active_days=len(data["active_days"])
+            )
+        );
     }
 
     for i in range(len(results)) {
@@ -124,20 +129,28 @@ def generate_html_table(contributors: list[Contributor], days: int) -> str {
     start_date = end_date - timedelta(days=days);
 
     lines = [];
-    lines.append(f"<h3>Top contributors in the last {days} days ({start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')})</h3>");
+    lines.append(
+        f"<h3>Top contributors in the last {days} days ({start_date.strftime(
+            '%Y-%m-%d'
+        )} to {end_date.strftime('%Y-%m-%d')})</h3>"
+    );
     lines.append("<table>");
-    lines.append("<thead><tr><th>Contributor</th><th>Commits</th><th>Active Days</th></tr></thead>");
+    lines.append(
+        "<thead><tr><th>Contributor</th><th>Commits</th><th>Active Days</th></tr></thead>"
+    );
     lines.append("<tbody>");
 
     for c in contributors {
-        lines.append(f"<tr><td>{c.name}</td><td>{c.commits}</td><td>{c.active_days}</td></tr>");
+        lines.append(
+            f"<tr><td>{c.name}</td><td>{c.commits}</td><td>{c.active_days}</td></tr>"
+        );
     }
 
     lines.append("</tbody></table>");
     return "\n".join(lines);
 }
 
-def get_tabs_css() -> str {
+def get_tabs_css -> str {
     return """
 <style>
 #tabs {
@@ -241,4 +254,6 @@ def main(days_arg: int = None) {
     print("\n".join(html));
 }
 
-with entry { main(); }
+with entry {
+    main();
+}
