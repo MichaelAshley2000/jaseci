@@ -235,6 +235,7 @@ impl JacAPIServerCore.start(
         self.register_websocket_endpoints();
     }
     self.register_root_asset_endpoint();
+    self._register_client_error_endpoint();
     self._configure_openapi_security();
     self.user_manager.create_user(Con.GUEST.value, '__no_password__');
     self._setup_scheduler();
@@ -816,6 +817,75 @@ impl JacAPIServerCore.register_sso_endpoints -> None {
 # ============================================================================
 # HMR (Hot Module Replacement) Support
 # ============================================================================
+"""Register the /cl/__error__ endpoint for client-side error reporting."""
+impl JacAPIServerCore._register_client_error_endpoint -> None {
+    import from fastapi { Request }
+    import from fastapi.responses { JSONResponse }
+    async def client_error_handler(request: Request) -> JSONResponse {
+        try {
+            data = await request.json();
+        } except Exception {
+            return JSONResponse(status_code=400, content={"error": "Invalid JSON"});
+        }
+        message = data.get('message', '');
+        if not message {
+            return JSONResponse(
+                status_code=400, content={"error": "Missing required field: message"}
+            );
+        }
+        # Rate limit and deduplicate
+        import from jaclang.runtimelib.source_mapping {
+            SourceMapper,
+            _error_rate_limiter
+        }
+        if not _error_rate_limiter.should_log(message) {
+            return JSONResponse(
+                status_code=200, content={"ok": True, "throttled": True}
+            );
+        }
+        stack = data.get('stack', '');
+        url = data.get('url', '');
+        source = data.get('source', '');
+        # Resolve stack trace to .jac files via source maps
+        if stack and self.base_path {
+            try {
+                mapper = SourceMapper.from_bundle(self.base_path);
+                stack = mapper.resolve_stack_trace(stack);
+            } except Exception { }
+        }
+        log_parts = [f"[Client] {message}"];
+        if stack {
+            log_parts.append(f"  Stack: {stack}");
+        }
+        if url {
+            log_parts.append(f"  URL: {url}");
+        }
+        if source {
+            log_parts.append(f"  Source: {source}");
+        }
+        logger.error('\n'.join(log_parts));
+        console.error(f"[Client] {message}");
+        if stack {
+            for line in stack.split('\n') {
+                console.print(f"    {line}");
+            }
+        }
+        return JSONResponse(status_code=200, content={"ok": True});
+    }
+    self.server.add_endpoint(
+        JEndPoint(
+            method=HTTPMethod.POST,
+            path='/cl/__error__',
+            callback=client_error_handler,
+            parameters=[],
+            response_model=None,
+            tags=['Client'],
+            summary='Report client-side error',
+            description='Receives client-side JavaScript errors for server-side logging.'
+        )
+    );
+}
+
 """Enable HMR mode - file changes trigger reload on next request."""
 impl JacAPIServerCore.enable_hmr(hot_reloader: Any) -> None {
     self._hot_reloader = hot_reloader;
@@ -1021,18 +1091,42 @@ impl JacAPIServerCore._create_admin_metrics_handler(
     import from fastapi { Request }
     import from fastapi.responses { Response, JSONResponse }
     import from jaclang.runtimelib.transport { TransportResponse, Meta }
+    import dataclasses;
+    import base64;
+
+    monitoring_config = get_scale_config().get_monitoring_config();
+    prometheus_password = monitoring_config.get('prometheus_admin_password', '');
+    admin_config = get_scale_config().get_admin_config();
+    admin_username = admin_config.get('username', 'admin');
 
     async def admin_metrics_handler(request: Request) -> Response {
         authorization = request.headers.get('Authorization');
-        admin_user = self.validate_admin_token(authorization);
-        if not admin_user {
+        # Accept Bearer JWT token (admin portal) or Basic Auth (Prometheus scraping)
+        authed = False;
+        if authorization {
+            if authorization.startswith('Bearer ') {
+                authed = self.validate_admin_token(authorization) is not None;
+            } elif authorization.startswith('Basic ') and prometheus_password {
+                try {
+                    decoded = base64.b64decode(authorization[6:]).decode('utf-8');
+                    parts = decoded.split(':', 1);
+                    authed = parts[0] == admin_username
+                    and parts[1] == prometheus_password;
+                } except Exception {
+                    authed = False;
+                }
+            }
+        }
+        if not authed {
             return JSONResponse(
                 status_code=403,
-                content=TransportResponse.fail(
-                    code='FORBIDDEN',
-                    message='Admin access required',
-                    meta=Meta(extra={'http_status': 403})
-                ).model_dump()
+                content=dataclasses.asdict(
+                    TransportResponse.fail(
+                        code='FORBIDDEN',
+                        message='Admin access required',
+                        meta=Meta(extra={'http_status': 403})
+                    )
+                )
             );
         }
         return original_handler();

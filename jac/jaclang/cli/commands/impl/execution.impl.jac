@@ -90,6 +90,7 @@ impl run(
     main: bool = True,
     cache: bool = True,
     autonative: bool = False,
+    show_errors: bool = False,
     args: list = []
 ) -> int {
     _ensure_jac_runtime();
@@ -137,7 +138,7 @@ impl run(
                     ir_mod = na_program.compile(file_path=full_path);
                     if (
                         ir_mod
-                        and ir_mod.gen._auto_promoted_native
+                        and ir_mod.gen.native_compat
                         and ir_mod.gen.native_engine
                     ) {
                         # Auto-promoted native module: execute via JIT
@@ -193,10 +194,22 @@ impl run(
         mach.close();
         return 1;
     }
-    if Jac.program.warnings_had {
+    n_errors = len(Jac.program.errors_had);
+    n_warnings = len(Jac.program.warnings_had);
+    if show_errors {
+        for error in Jac.program.errors_had {
+            console.error(error.pretty_print());
+        }
         for warning in Jac.program.warnings_had {
             console.warning(f"{warning}");
         }
+    }
+    if n_errors or n_warnings {
+        console.print(
+            f"\n{n_errors} error(s), {n_warnings} warning(s) "
+            f"[diagnostics from first compile, cached for subsequent runs]",
+            style="dim"
+        );
     }
     sys.argv = original_argv;
     mach.close();
@@ -209,7 +222,7 @@ impl enter(
     entrypoint: str,
     args: list = [],
     main: bool = True,
-    `root: str = '',
+    root: str = '',
     nd: str = ''
 ) -> int {
     _ensure_jac_runtime();
@@ -219,8 +232,8 @@ impl enter(
     _discover_config_from_file(filename);
     (base, mod, mach) = _proc_file(filename);
     # Set user root if provided (for permission boundary)
-    if `root {
-        mach.set_user_root(`root);
+    if root {
+        mach.set_user_root(root);
     }
     if filename.endswith('.jac') {
         ret_module = Jac.jac_import(
@@ -426,58 +439,31 @@ impl start(
 
 """Ensure watchdog is installed, auto-install if missing."""
 def _ensure_watchdog_installed -> bool {
-    import from pathlib { Path }
     import from jaclang.project.config { get_config }
-    import from jaclang.project.dependencies {
-        get_venv_site_packages,
-        DependencyInstaller
-    }
+    import from jaclang.project.dependencies { DependencyInstaller }
 
-    config = get_config();
-    if config is None {
-        # No project, check global availability
-        try {
-            import watchdog;
-            return True;
-        } except ImportError {
-            console.error("\n  Error: --dev requires 'watchdog' package.\n");
-            console.error("  Install it with: pip install watchdog\n");
-            return False;
-        }
-    }
-    # Check if watchdog is installed in the project's venv
-    site_packages = get_venv_site_packages(config.get_venv_dir());
-    if site_packages.exists() {
-        # Add site-packages to path temporarily to check
-        import sys;
-        original_path = sys.path.copy();
-        sys.path.insert(0, str(site_packages));
-        try {
-            import watchdog;
-            return True;
-        } except ImportError { } finally {
-            sys.path = original_path;
-        }
-    }
-    # Fallback: check if globally available
     try {
         import watchdog;
         return True;
-    } except ImportError {
-        # Auto-install watchdog from dev dependencies
-        console.print(
-            "\n  📦 Installing watchdog (required for --dev mode)...\n", style="info"
-        );
-        installer = DependencyInstaller(config=config, verbose=False);
-        specs = installer.get_pip_package_specs(include_dev=True);
-        if installer.install_package(specs) {
-            console.success("  ✔ watchdog installed\n");
-            return True;
-        } else {
-            console.error("\n  Error: Failed to install watchdog\n");
-            return False;
-        }
+    } except ImportError { }
+
+    config = get_config();
+    if config is None {
+        console.error("\n  Error: --dev requires 'watchdog' package.\n");
+        console.error("  Install it with: pip install watchdog\n");
+        return False;
     }
+
+    console.print(
+        "\n  📦 Installing watchdog (required for --dev mode)...\n", style="info"
+    );
+    installer = DependencyInstaller(config=config, verbose=False);
+    if installer.install_package(["watchdog>=3.0.0"]) {
+        console.success("watchdog installed");
+        return True;
+    }
+    console.error("\n  Error: Failed to install watchdog\n");
+    return False;
 }
 
 """Get local network IP addresses."""

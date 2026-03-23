@@ -59,6 +59,7 @@ nav:
       - Developer Workflow:
           - CLI Commands: "reference/cli/index.md"
           - Configuration: "reference/config/index.md"
+          - Errors & Warnings: "reference/diagnostics.md"
           - Code Organization: "reference/code-organization.md"
           - Testing: "reference/testing.md"
           - Debugging: "tutorials/language/debugging.md"
@@ -71,6 +72,7 @@ nav:
 
   - Community:
       - Contributing: "community/contributing.md"
+      - Codebase Guide: "community/codebase-guide.md"
       - Breaking Changes: "community/breaking-changes.md"
       - PR Leaderboard: "community/contributors.md"
       - Release Notes:

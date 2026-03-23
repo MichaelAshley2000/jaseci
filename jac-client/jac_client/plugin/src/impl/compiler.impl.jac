@@ -38,6 +38,12 @@ impl ViteCompiler.compile(
     # Compile runtime AFTER dependencies so it overwrites any dependency-compiled
     # version of client_runtime.js with the proper ES module exports
     self.compile_runtime_utils();
+    # Compile PWA runtime if PWA is enabled
+    import from jac_client.plugin.src.config_loader { JacClientConfig as PwaConfig }
+    pwa_config = PwaConfig(self.project_dir);
+    if pwa_config.is_pwa_enabled() {
+        self.compile_pwa_runtime();
+    }
     self.copy_root_assets();
     self.create_entry_file(module_path);
     # Return exports and globals without bundling
@@ -69,7 +75,7 @@ impl ViteCompiler.create_entry_file(self: ViteCompiler, module_path: Path) -> No
     } else {
         # Explicit routing mode: import app from entry module (original behavior)
         app_module_name = module_path.stem;
-        entry_content = f'import React from "react";\nimport {{ createRoot }} from "react-dom/client";\nimport {{ app as App }} from "./{app_module_name}.js";\nimport {{ JacClientErrorBoundary, ErrorFallback }} from "@jac/runtime";\n\nconst root = createRoot(document.getElementById("root"));\nroot.render(\n\tReact.createElement(\n\t\tJacClientErrorBoundary,{{ FallbackComponent: ErrorFallback }},\n\t\tReact.createElement(App, null)\n\t)\n);\n';
+        entry_content = f'import React from "react";\nimport {{ createRoot }} from "react-dom/client";\nimport {{ app as App }} from "./{app_module_name}.js";\nimport {{ JacClientErrorBoundary, ErrorFallback, __jacInstallErrorHandlers }} from "@jac/runtime";\n\n__jacInstallErrorHandlers();\nconst root = createRoot(document.getElementById("root"));\nroot.render(\n\tReact.createElement(\n\t\tJacClientErrorBoundary,{{ FallbackComponent: ErrorFallback }},\n\t\tReact.createElement(App, null)\n\t)\n);\n';
     }
     entry_file.write_text(entry_content, encoding='utf-8');
 }
@@ -94,9 +100,11 @@ impl ViteCompiler._create_pages_entry_content(
     lines.append('import { createRoot } from "react-dom/client";');
     lines.append('import { BrowserRouter, Routes, Route } from "react-router-dom";');
     lines.append(
-        'import { JacClientErrorBoundary, ErrorFallback, AuthGuard } from "@jac/runtime";'
+        'import { JacClientErrorBoundary, ErrorFallback, AuthGuard, __jacInstallErrorHandlers } from "@jac/runtime";'
     );
     lines.append('import { routes, layouts } from "./_routes.js";');
+    lines.append('');
+    lines.append('__jacInstallErrorHandlers();');
     if has_app_wrapper {
         lines.append(f'import {{ app as AppWrapper }} from "./{module_path.stem}.js";');
     }
@@ -284,6 +292,53 @@ impl ViteCompiler.compile_dependencies_recursively(
     output_path.parent.mkdir(parents=True, exist_ok=True);
     source_header = f"/* Source: {module_path} */\n";
     output_path.write_text(source_header + combined_js, encoding='utf-8');
+    # Generate source map for .jac → .js line mapping
+    try {
+        import from jaclang.runtimelib.source_mapping { generate_source_map_json }
+        import from jaclang.jac0core.runtime { JacRuntime as Jac }
+        hub_key = str(module_path);
+        hub_mod = Jac.program.mod.hub.get(hub_key);
+        if hub_mod and hub_mod.gen.es_ast {
+            import from jaclang.compiler.passes.ecmascript.es_unparse {
+                es_to_js_with_map
+            }
+            (_, line_map) = es_to_js_with_map(hub_mod.gen.es_ast);
+            if line_map {
+                # Compute exact offset: count the lines in the written file
+                # before the raw generated code starts.
+                # Written file = source_header + combined_js
+                # combined_js = runtime_imports_prefix + raw_js
+                # So offset = lines in (source_header + runtime_imports_prefix)
+                raw_js = hub_mod.gen.js or '';
+                full_output = source_header + combined_js;
+                # Find where raw_js starts in full_output
+                raw_start_idx = full_output.find(raw_js);
+                if raw_start_idx > 0 {
+                    prefix = full_output[:raw_start_idx];
+                    header_lines = prefix.count('\n');
+                } else {
+                    header_lines = 0;
+                }
+                if header_lines > 0 {
+                    line_map = [
+                        (out + header_lines, src_l, src_c)
+                        for (out, src_l, src_c) in line_map
+                    ];
+                }
+                map_json = generate_source_map_json(
+                    source_file=str(module_path),
+                    output_file=output_path.name,
+                    line_map=line_map
+                );
+                map_path = output_path.parent / f"{output_path.name}.map";
+                map_path.write_text(map_json, encoding='utf-8');
+                # Append sourceMappingURL so Vite chains through to .jac
+                with open(output_path, 'a', encoding='utf-8') as f {
+                    f.write(f"\n//# sourceMappingURL={output_path.name}.map\n");
+                }
+            }
+        }
+    } except Exception { }
     if (not manifest or not manifest.imports) {
         return;
     }
@@ -329,6 +384,25 @@ impl ViteCompiler.compile_runtime_utils(self: ViteCompiler) -> tuple[str, list[s
         runtimeutils_js, encoding='utf-8'
     );
     return (runtimeutils_js, all_exports);
+}
+
+"""Compile PWA runtime utilities (only when PWA is enabled)."""
+impl ViteCompiler.compile_pwa_runtime(self: ViteCompiler) -> tuple[str, list[str]] {
+    runtime_path = self.runtime_path;
+    if runtime_path is None {
+        return ('', []);
+    }
+    pwa_runtime_path: Path = runtime_path.parent / 'pwa_runtime.cl.jac';
+    if not pwa_runtime_path.exists() {
+        return ('', []);
+    }
+    (pwa_js, mod, pwa_manifest) = self.jac_compiler.compile_module(pwa_runtime_path);
+    pwa_exports_list = self.jac_compiler.extract_exports(pwa_manifest);
+    glob_names = list(pwa_manifest.globals) if pwa_manifest else [];
+    all_exports = sorted(set(pwa_exports_list + glob_names));
+    self.compiled_dir.mkdir(parents=True, exist_ok=True);
+    (self.compiled_dir / 'pwa_runtime.js').write_text(pwa_js, encoding='utf-8');
+    return (pwa_js, all_exports);
 }
 
 """Convert a .jac relative path string to .js, handling compound extensions."""

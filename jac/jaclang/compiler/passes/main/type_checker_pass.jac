@@ -10,14 +10,31 @@ Reference:
 """
 import jaclang.jac0core.unitree as uni;
 import from jaclang.jac0core.passes { UniPass }
+import from jaclang.jac0core.diagnostics {
+    E1001,
+    E1002,
+    E1003,
+    E1004,
+    E1010,
+    E1011,
+    E1020,
+    E1021,
+    E1022,
+    E1060,
+    E1061,
+    E1090,
+    E1091,
+    E1092,
+    E1093,
+    E1094,
+    E1095,
+    W2014,
+    E2015
+}
 
 """Type checker pass for JacLang."""
 class TypeCheckPass(UniPass) {
     def before_pass(self: TypeCheckPass) -> None;
-    def _add_diagnostic(
-        self: TypeCheckPass, nd: uni.UniNode, message: str, warning: bool
-    ) -> None;
-
     def _insert_builtin_symbols(self: TypeCheckPass) -> None;
     def enter_ability(self: TypeCheckPass, nd: uni.Ability) -> None;
     def exit_ability(self: TypeCheckPass, nd: uni.Ability) -> None;
@@ -39,6 +56,8 @@ class TypeCheckPass(UniPass) {
     def exit_name(self: TypeCheckPass, nd: uni.Name) -> None;
     def enter_if_stmt(self: TypeCheckPass, nd: uni.IfStmt) -> None;
     def exit_if_stmt(self: TypeCheckPass, nd: uni.IfStmt) -> None;
+    def enter_match_case(self: TypeCheckPass, nd: uni.MatchCase) -> None;
+    def exit_match_case(self: TypeCheckPass, nd: uni.MatchCase) -> None;
     def exit_param_var(self: TypeCheckPass, nd: uni.ParamVar) -> None;
     def exit_has_var(self: TypeCheckPass, nd: uni.HasVar) -> None;
     def exit_in_for_stmt(self: TypeCheckPass, nd: uni.InForStmt) -> None;

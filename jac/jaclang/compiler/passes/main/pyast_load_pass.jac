@@ -21,6 +21,8 @@ import from threading { Event }
 import from typing { TYPE_CHECKING, TypeAlias, TypeVar, cast }
 import jaclang.jac0core.unitree as uni;
 import from jaclang.jac0core.constant { Tokens as Tok }
+import from jaclang.jac0core.diagnostics { E5041, E5042 }
+import from jaclang.jac0core.helpers { evaluate_version_condition }
 import from jaclang.jac0core.passes.transform { Transform }
 
 with entry {
@@ -38,11 +40,13 @@ obj PyastBuildPass(Transform[uni.PythonModuleAst, uni.Module]) {
         cancel_token: Event | None = None,
         mod_path: str by postinit,
         orig_src: str by postinit,
+        _source_lines: list[str] by postinit,
         in_type_annotation: bool by postinit,
         in_match_pattern: bool by postinit,
         in_fstring_expr: bool by postinit;
 
     def postinit -> None;
+    def _get_source_segment(nd: py_ast.AST) -> (str | None);
     def nu(nd: T) -> T;
     def convert(nd: py_ast.AST) -> uni.UniNode;
     def transform(ir_in: uni.PythonModuleAst) -> uni.Module;
@@ -66,6 +70,7 @@ obj PyastBuildPass(Transform[uni.PythonModuleAst, uni.Module]) {
     def proc_async_for(nd: py_ast.AsyncFor) -> uni.InForStmt;
     def proc_while(nd: py_ast.While) -> uni.WhileStmt;
     def proc_if(nd: py_ast.If) -> uni.IfStmt;
+    def _flatten_version_conditionals(body: list[uni.UniNode]) -> list[uni.UniNode];
     def proc_with(nd: py_ast.With) -> uni.WithStmt;
     def proc_async_with(nd: py_ast.AsyncWith) -> uni.WithStmt;
     def proc_raise(nd: py_ast.Raise) -> uni.RaiseStmt;

@@ -8,12 +8,46 @@ This parser outputs unitree.py AST nodes directly.
 """
 
 import from .tokens { Token, TokenKind, SourceLoc }
-import from .lexer { Lexer, LexerError }
+import from .lexer { Lexer }
 
 # Import unitree classes from Python
 import from jaclang.jac0core.unitree { UniNode, Token as UniToken, Expr }
 import from jaclang.jac0core.codeinfo { CodeLocInfo }
 import from jaclang.jac0core.passes.transform { Alert }
+import from jaclang.jac0core.diagnostics {
+    DiagnosticInfo,
+    E0001,
+    E0002,
+    E0003,
+    E0004,
+    E0005,
+    E0006,
+    E0010,
+    E0011,
+    E0012,
+    E0013,
+    E0020,
+    E0021,
+    E0022,
+    E0023,
+    E0030,
+    E0031,
+    E0032,
+    E0033,
+    E0034,
+    E0040,
+    E0041,
+    E0042,
+    E0043,
+    E0044,
+    E0045,
+    E0046,
+    E0047,
+    E0050,
+    E0051,
+    W0060,
+    W0061
+}
 import from jaclang.jac0core.unitree { Name, String, Int, Float, Bool, Null }
 import from jaclang.jac0core.unitree {
     Ellipsis as EllipsisLit,
@@ -95,6 +129,7 @@ import from jaclang.jac0core.unitree {
     AtomUnit,
     FuncCall,
     IndexSlice,
+    Slice,
     EdgeRefTrailer
 }
 import from jaclang.jac0core.unitree {
@@ -146,15 +181,6 @@ import from jaclang.jac0core.constant {
     CodeContext
 }
 
-obj ParseError {
-    has message: str,
-        loc: SourceLoc;
-
-    def __str__ -> str {
-        return f"ParseError at line {self.loc.line}: {self.message}";
-    }
-}
-
 glob TOKEN_KIND_TO_TOK: dict[TokenKind, str] = {
          # Literals
          TokenKind.INT: Tok.INT.value,
@@ -182,6 +208,16 @@ glob TOKEN_KIND_TO_TOK: dict[TokenKind, str] = {
          TokenKind.TYP_BYTES: Tok.TYP_BYTES.value,
          TokenKind.TYP_ANY: Tok.TYP_ANY.value,
          TokenKind.TYP_TYPE: Tok.TYP_TYPE.value,
+         TokenKind.TYP_I8: Tok.TYP_I8.value,
+         TokenKind.TYP_U8: Tok.TYP_U8.value,
+         TokenKind.TYP_I16: Tok.TYP_I16.value,
+         TokenKind.TYP_U16: Tok.TYP_U16.value,
+         TokenKind.TYP_I32: Tok.TYP_I32.value,
+         TokenKind.TYP_U32: Tok.TYP_U32.value,
+         TokenKind.TYP_I64: Tok.TYP_I64.value,
+         TokenKind.TYP_U64: Tok.TYP_U64.value,
+         TokenKind.TYP_F32: Tok.TYP_F32.value,
+         TokenKind.TYP_F64: Tok.TYP_F64.value,
          # Keywords
          TokenKind.KW_ABSTRACT: Tok.KW_ABSTRACT.value,
          TokenKind.KW_OBJECT: Tok.KW_OBJECT.value,
@@ -236,7 +272,6 @@ glob TOKEN_KIND_TO_TOK: dict[TokenKind, str] = {
          TokenKind.KW_DISENGAGE: Tok.KW_DISENGAGE.value,
          TokenKind.KW_HERE: Tok.KW_HERE.value,
          TokenKind.KW_VISITOR: Tok.KW_VISITOR.value,
-         TokenKind.KW_ROOT: Tok.KW_ROOT.value,
          TokenKind.KW_ASYNC: Tok.KW_ASYNC.value,
          TokenKind.KW_AWAIT: Tok.KW_AWAIT.value,
          TokenKind.KW_FLOW: Tok.KW_FLOW.value,
@@ -355,7 +390,7 @@ obj Parser {
     has tokens: list[Token],
         pos: int = 0,
         _tokens_len: int = 0,
-        errors: list[ParseError] = [],
+        error_count: int = 0,
         file_path: str = "<input>",
         source_code: str = "",
         source: Source | None = None,
@@ -378,9 +413,15 @@ obj Parser {
     def expect(kind: TokenKind) -> Token;
     def consume_uni(kind: TokenKind) -> UniToken;
     def expect_name -> Token;
+    def _make_alert(
+        message: str, sloc: SourceLoc, code: DiagnosticInfo | None = None
+    ) -> Alert;
+
     def error(message: str);
     def error_at(message: str, loc: SourceLoc);
     def warn_at(message: str, loc: SourceLoc);
+    def emit_diag(diag: DiagnosticInfo, loc: SourceLoc | None = None, **kwargs: object);
+    def emit_warn(diag: DiagnosticInfo, loc: SourceLoc | None = None, **kwargs: object);
     def make_uni_token(tok: Token) -> UniToken;
     def make_name(tok: Token, is_enum_stmt: bool = False) -> Name;
     def make_special_name(tok: Token) -> Name;
@@ -432,6 +473,7 @@ obj Parser {
     def parse_call_args(kid: list) -> list;
     def parse_call_arg -> Expr | KWPair;
     def parse_filter_compr_inner -> FilterCompr;
+    def parse_filter_compr_bracket -> FilterCompr;
     def parse_assign_compr_inner -> AssignCompr;
     def parse_atom_literal -> Expr;
     def parse_multistring -> Expr;
@@ -542,8 +584,9 @@ obj Parser {
 
 def parse(
     source: str, file_path: str = "<input>", prog: object | None = None
-) -> tuple[Module, list[ParseError], list[LexerError]] {
+) -> tuple[Module, bool] {
     lexer = Lexer(source=source, file_path=file_path);
+    lexer.prog = prog;
     tokens = lexer.tokenize();
     parser = Parser(tokens=tokens, file_path=file_path, source_code=source, prog=prog);
     module = parser.parse();
@@ -567,5 +610,23 @@ def parse(
             module.source.comments.append(ct);
         }
     }
-    return (module, parser.errors, lexer.errors);
+    # Parse inline suppressions from comments: # jac:ignore[CODE1, CODE2]
+    if module.source {
+        import re;
+        ignore_pattern = re.compile(r'#\s*jac:ignore\[([^\]]+)\]');
+        for comment in module.source.comments {
+            m = ignore_pattern.search(comment.value);
+            if m {
+                codes = {c.strip() for c in m.group(1).split(',')};
+                line = comment.line_no;
+                if line in module.source.inline_suppressions {
+                    module.source.inline_suppressions[line].update(codes);
+                } else {
+                    module.source.inline_suppressions[line] = codes;
+                }
+            }
+        }
+    }
+    had_error = parser.error_count > 0 or lexer.error_count > 0;
+    return (module, had_error);
 }

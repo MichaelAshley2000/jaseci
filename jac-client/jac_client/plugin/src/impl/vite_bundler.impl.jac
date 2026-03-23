@@ -334,13 +334,21 @@ impl ViteBundler._generate_vite_config_content(
     # Calculate paths for aliases
     if entry_relative.endswith('/build/main.js') {
         compiled_utils_relative = entry_relative[:-13] + '/compiled/client_runtime.js';
+        compiled_pwa_relative = entry_relative[:-13] + '/compiled/pwa_runtime.js';
         compiled_assets_relative = entry_relative[:-13] + '/compiled/assets';
     } elif entry_relative.endswith('build/main.js') {
         compiled_utils_relative = 'compiled/client_runtime.js';
+        compiled_pwa_relative = 'compiled/pwa_runtime.js';
         compiled_assets_relative = 'compiled/assets';
     } else {
         compiled_utils_relative = 'compiled/client_runtime.js';
+        compiled_pwa_relative = 'compiled/pwa_runtime.js';
         compiled_assets_relative = 'compiled/assets';
+    }
+    # Check if PWA is enabled to add @jac/pwa alias
+    pwa_alias_str = '';
+    if self.config_loader.is_pwa_enabled() {
+        pwa_alias_str = f'\n      "@jac/pwa": path.resolve(buildDir, "{compiled_pwa_relative}"),';
     }
     plugins = [];
     plugin_imports = [];
@@ -456,6 +464,7 @@ export default defineConfig({{
     sourcemap: true, // Enable source maps for better error messages{build_overrides_str}
   }},
   server: {{
+    host: true,
     watch: {{
       usePolling: true,
       interval: 100,
@@ -486,7 +495,7 @@ export default defineConfig({{
   }},
   resolve: {{
     alias: {{
-      "@jac/runtime": path.resolve(buildDir, "{compiled_utils_relative}"),
+      "@jac/runtime": path.resolve(buildDir, "{compiled_utils_relative}"),{pwa_alias_str}
       "@jac-client/assets": path.resolve(buildDir, "{compiled_assets_relative}"),{user_aliases_str}
     }},
     extensions: [{extensions_str}],
@@ -529,13 +538,21 @@ function jacSourceMapper() {{
     name: 'jac-source-mapper',
     enforce: 'pre',
 
-    // Extract source mapping from compiled files
+    // Extract source mapping and chain per-file source maps
     transform(code, id) {{
       if (id.includes('/compiled/') && id.endsWith('.js')) {{
         const match = code.match(/^\\/\\* Source: (.+?) \\*\\//);
         if (match) {{
           sourceMap.set(id, match[1]);
         }}
+        // Load per-file .map if it exists and return it so Vite chains it
+        const mapPath = id + '.map';
+        try {{
+          if (fs.existsSync(mapPath)) {{
+            const rawMap = JSON.parse(fs.readFileSync(mapPath, 'utf-8'));
+            return {{ code, map: rawMap }};
+          }}
+        }} catch (e) {{}}
       }}
       return null;
     }},
@@ -601,7 +618,7 @@ export default defineConfig({{
   publicDir: false,
 {server_section}  resolve: {{
       alias: {{
-        "@jac/runtime": path.resolve(buildDir, "{compiled_utils_relative}"),
+        "@jac/runtime": path.resolve(buildDir, "{compiled_utils_relative}"),{pwa_alias_str}
         "@jac-client/assets": path.resolve(buildDir, "{compiled_assets_relative}"),{user_aliases_str}
       }},
       extensions: [{extensions_str}],
@@ -922,7 +939,16 @@ def _toml_config_to_js(config_name: str, config_data: dict) -> str {
 
 """Build the Vite dev server command."""
 def _build_vite_dev_command(config_rel: Path, port: int) -> list[str] {
-    return ['bun', 'x', 'vite', '--config', str(config_rel), '--port', str(port)];
+    return [
+        'bun',
+        'x',
+        'vite',
+        '--config',
+        str(config_rel),
+        '--port',
+        str(port),
+        '--host'
+    ];
 }
 
 """Check if a line indicates Vite server is ready."""
