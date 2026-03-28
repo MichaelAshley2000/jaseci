@@ -1038,9 +1038,14 @@ impl EsastGenPass.exit_func_call(nd: uni.FuncCall) -> None {
                         ),
                         jac_node=nd
                     );
-                    # Wrap return with __from_wire if return type is a boundary type
+                    # Wrap return with __from_wire if return type is a boundary type.
+                    # We must await the call BEFORE wrapping with __from_wire
+                    # so __from_wire receives the resolved value, not a Promise.
                     if inline_ret_type in inline_boundary
                     and inline_boundary[inline_ret_type].kind != "enum" {
+                        result_expr = self.sync_loc(
+                            es.AwaitExpression(argument=result_expr), jac_node=nd
+                        );
                         result_expr = self.sync_loc(
                             es.CallExpression(
                                 callee=es.MemberExpression(
@@ -1057,6 +1062,13 @@ impl EsastGenPass.exit_func_call(nd: uni.FuncCall) -> None {
                         inner = inline_ret_type[5:-1];
                         if inner in inline_boundary
                         and inline_boundary[inner].kind != "enum" {
+                            # Wrap in AwaitExpression BEFORE chaining .map()
+                            # so the resolved array (not the Promise) gets mapped.
+                            # The outer exit_await_expr will see this is already
+                            # awaited and produce (await call()).map(...).
+                            result_expr = self.sync_loc(
+                                es.AwaitExpression(argument=result_expr), jac_node=nd
+                            );
                             result_expr = self.sync_loc(
                                 es.CallExpression(
                                     callee=es.MemberExpression(
@@ -1093,6 +1105,11 @@ impl EsastGenPass.exit_func_call(nd: uni.FuncCall) -> None {
                             val_type = dict_params[comma_pos + 2:].strip();
                             if val_type in inline_boundary
                             and inline_boundary[val_type].kind != "enum" {
+                                # Await before dict hydration
+                                result_expr = self.sync_loc(
+                                    es.AwaitExpression(argument=result_expr),
+                                    jac_node=nd
+                                );
                                 entries_call = es.CallExpression(
                                     callee=es.MemberExpression(
                                         object=es.Identifier(name='Object'),
@@ -1889,9 +1906,27 @@ impl EsastGenPass.exit_binary_expr(nd: uni.BinaryExpr) -> None {
     } else {
         operator = ES_BINARY_OPS.get(op_name) if op_name else '+';
         operator = operator or '+';
-        bin_expr = self.sync_loc(
-            es.BinaryExpression(operator=operator, left=left, right=right), jac_node=nd
-        );
+        # Heuristic: when `+` is used with an ArrayExpression on either side,
+        # emit array spread syntax [...left, ...right] instead of raw `+`
+        # which would produce string concatenation in JS. This handles the
+        # case where type info is unavailable (e.g. in .impl.jac files) but
+        # the programmer clearly intended list concatenation.
+        if operator == '+'
+        and (
+            isinstance(left, es.ArrayExpression)
+            or isinstance(right, es.ArrayExpression)
+        ) {
+            left_spread = es.SpreadElement(argument=left);
+            right_spread = es.SpreadElement(argument=right);
+            bin_expr = self.sync_loc(
+                es.ArrayExpression(elements=[left_spread, right_spread]), jac_node=nd
+            );
+        } else {
+            bin_expr = self.sync_loc(
+                es.BinaryExpression(operator=operator, left=left, right=right),
+                jac_node=nd
+            );
+        }
     }
     nd.gen.es_ast = bin_expr;
 }
@@ -3554,6 +3589,26 @@ impl EsastGenPass._emit_boundary_type_stubs(nd: uni.Module) -> list[es.Statement
                     )
                 );
                 ctor_stmts.append(jac_id_assign);
+                # Also expose _jac_id as .id for client-side convenience.
+                # The jac-client runtime provides .id on wire objects;
+                # typed interop classes must do the same so t.id works
+                # in JSX keys and event handlers.
+                id_alias = es.ExpressionStatement(
+                    expression=es.AssignmentExpression(
+                        operator='=',
+                        left=es.MemberExpression(
+                            object=es.ThisExpression(),
+                            property=es.Identifier(name='id'),
+                            computed=False
+                        ),
+                        right=es.MemberExpression(
+                            object=es.ThisExpression(),
+                            property=es.Identifier(name='_jac_id'),
+                            computed=False
+                        )
+                    )
+                );
+                ctor_stmts.append(id_alias);
             }
             ctor = es.FunctionExpression(
                 id=None,
