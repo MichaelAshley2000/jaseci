@@ -1220,6 +1220,8 @@ impl JacAPIServerAdmin.build_admin_client(force: bool = False) -> bool {
     }
 
     import from jac_scale.admin { admin_portal }
+    import shutil;
+    import tempfile;
     admin_dir = Path(admin_portal.__file__).parent;
 
     # Check for pre-built assets bundled with the package
@@ -1237,17 +1239,26 @@ impl JacAPIServerAdmin.build_admin_client(force: bool = False) -> bool {
     }
 
     # Fall back to building from source (dev mode)
-    ui_dir = admin_dir / "ui";
-    if not (ui_dir / "main.jac").exists() {
-        logger.error(f"Admin UI source not found at {ui_dir}");
+    ui_src = admin_dir / "ui";
+    if not (ui_src / "main.jac").exists() {
+        logger.error(f"Admin UI source not found at {ui_src}");
         return False;
     }
     logger.info("Building admin client from source...");
     try {
-        # Run jac build in the UI directory
+        # Copy source to a writable location so jac build can create
+        # .jac/ artifacts (site-packages is read-only for non-root users)
+        import os;
+        build_root = Path(os.getcwd()) / ".jac" / "admin_build";
+        if build_root.exists() {
+            shutil.rmtree(build_root);
+        }
+        shutil.copytree(ui_src, build_root);
+
+        # Run jac build in the writable copy
         result = subprocess.run(
             ["jac", "build", "main.jac"],
-            cwd=str(ui_dir),
+            cwd=str(build_root),
             capture_output=True,
             text=True,
             timeout=300
@@ -1259,10 +1270,24 @@ impl JacAPIServerAdmin.build_admin_client(force: bool = False) -> bool {
         }
 
         # Copy built files to .jac/admin
-        ui_dist = ui_dir / ".jac" / "client" / "dist";
+        ui_dist = build_root / ".jac" / "client" / "dist";
         if ui_dist.exists() {
-            _copy_dir_contents(ui_dist, dist_dir);
+            dist_dir.mkdir(parents=True, exist_ok=True);
+            for item in ui_dist.iterdir() {
+                dest = dist_dir / item.name;
+                if item.is_dir() {
+                    if dest.exists() {
+                        shutil.rmtree(dest);
+                    }
+                    shutil.copytree(item, dest);
+                } else {
+                    shutil.copy2(item, dest);
+                }
+            }
         }
+
+        # Clean up the build copy
+        shutil.rmtree(build_root, ignore_errors=True);
 
         logger.info("Admin client built successfully");
         return True;
