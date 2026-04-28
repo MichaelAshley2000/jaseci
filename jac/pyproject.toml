@@ -23,6 +23,9 @@ dependencies = ["llvmlite>=0.43.0"]
 Repository = "https://github.com/Jaseci-Labs/jaseci"
 Homepage = "https://jaseci.org"
 Documentation = "https://docs.jaseci.org"
+Source = "https://github.com/Jaseci-Labs/jaseci/tree/main/jac"
+Issues = "https://github.com/Jaseci-Labs/jaseci/issues"
+Changelog = "https://github.com/Jaseci-Labs/jaseci/blob/main/docs/docs/community/release_notes/jaclang.md"
 
 [project.scripts]
 jac = "jaclang.jac0core.cli_boot:start_cli"
