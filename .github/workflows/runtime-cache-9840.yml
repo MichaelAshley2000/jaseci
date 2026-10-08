@@ -63,7 +63,7 @@ jobs:
             sha256sum jac cache_consistency_test.jac
             timeout 180 ./jac --version
           } | tee versions.log
-          timeout 120 ./jac -m pip install pymongo==4.14.1 redis==6.4.0
+          timeout 120 ./jac -m pip install --only-binary=:all: pymongo==4.18.2 redis==6.4.0
           ./jac -m pip show pymongo redis >> versions.log
       - name: Check diagnostic fixture
         shell: bash
