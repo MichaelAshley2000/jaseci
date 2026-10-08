@@ -46,11 +46,12 @@ jobs:
         with:
           sparse-checkout: diagnostics/9840
       - name: Prepare independent fixture and pinned official runtime
+        id: runtime_setup
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/runtime-cache-9840"
-          cp diagnostics/9840/cache_consistency_test.jac "$RUNNER_TEMP/runtime-cache-9840/"
+          cp diagnostics/9840/*.jac "$RUNNER_TEMP/runtime-cache-9840/"
           curl --fail --location --retry 3 --max-time 120 \
             https://github.com/jaseci-labs/jac/releases/download/v0.34.21/jac-0.34.21-linux-x86_64 \
             --output "$RUNNER_TEMP/runtime-cache-9840/jac"
@@ -60,7 +61,7 @@ jobs:
           {
             echo "workflow_commit=${{ github.sha }}"
             echo 'runtime_source_commit=3b8b97b889a74ee48fc00839fc64976c3c7a07e3'
-            sha256sum jac cache_consistency_test.jac
+            sha256sum jac *.jac
             timeout 180 ./jac --version
           } | tee versions.log
           timeout 120 ./jac -m pip install --only-binary=:all: pymongo==4.18.2 redis==6.4.0
@@ -77,6 +78,21 @@ jobs:
           set -euo pipefail
           cd "$RUNNER_TEMP/runtime-cache-9840"
           timeout 180 ./jac test cache_consistency_test.jac -v 2>&1 | tee runtime-cache-diagnostic.log
+      - name: Check ordinary Mongo commit-failure diagnostic
+        if: ${{ !cancelled() && steps.runtime_setup.outcome == 'success' }}
+        id: commit_failure_check
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/runtime-cache-9840"
+          timeout 120 ./jac check runtime_commit_failure_test.jac 2>&1 | tee commit-failure-check.log
+      - name: Run separate ordinary Mongo commit-failure contract
+        if: ${{ !cancelled() && steps.commit_failure_check.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/runtime-cache-9840"
+          timeout 180 ./jac test runtime_commit_failure_test.jac -v 2>&1 | tee runtime-commit-failure.log
       - name: Preserve bounded diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -86,5 +102,7 @@ jobs:
             ${{ runner.temp }}/runtime-cache-9840/versions.log
             ${{ runner.temp }}/runtime-cache-9840/check.log
             ${{ runner.temp }}/runtime-cache-9840/runtime-cache-diagnostic.log
+            ${{ runner.temp }}/runtime-cache-9840/commit-failure-check.log
+            ${{ runner.temp }}/runtime-cache-9840/runtime-commit-failure.log
           if-no-files-found: warn
           retention-days: 14
