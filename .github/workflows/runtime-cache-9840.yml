@@ -1,4 +1,4 @@
-name: Runtime cache diagnostic 9840
+name: Runtime cache diagnostic 9840 (Jac 0.34.21)
 
 on:
   push:
@@ -52,14 +52,14 @@ jobs:
           mkdir -p "$RUNNER_TEMP/runtime-cache-9840"
           cp diagnostics/9840/cache_consistency_test.jac "$RUNNER_TEMP/runtime-cache-9840/"
           curl --fail --location --retry 3 --max-time 120 \
-            https://github.com/jaseci-labs/jac/releases/download/v0.34.20/jac-0.34.20-linux-x86_64 \
+            https://github.com/jaseci-labs/jac/releases/download/v0.34.21/jac-0.34.21-linux-x86_64 \
             --output "$RUNNER_TEMP/runtime-cache-9840/jac"
           cd "$RUNNER_TEMP/runtime-cache-9840"
-          echo '3d9f166c6c40a379d1b3d690448891c1971f07658dc52e34e8926a77670462dd  jac' | sha256sum --check
+          echo '36fdb2c29f43fbcbb938be6649bb40ec362de0530ac62ff7d9e027dcbf255027  jac' | sha256sum --check
           chmod +x jac
           {
             echo "workflow_commit=${{ github.sha }}"
-            echo 'runtime_source_commit=38b1c17d35a3f7214615ab1fc391b229c56de1dc'
+            echo 'runtime_source_commit=3b8b97b889a74ee48fc00839fc64976c3c7a07e3'
             sha256sum jac cache_consistency_test.jac
             timeout 180 ./jac --version
           } | tee versions.log
@@ -81,7 +81,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: runtime-cache-9840-${{ github.sha }}
+          name: runtime-cache-9840-jac-0.34.21-${{ github.sha }}
           path: |
             ${{ runner.temp }}/runtime-cache-9840/versions.log
             ${{ runner.temp }}/runtime-cache-9840/check.log
