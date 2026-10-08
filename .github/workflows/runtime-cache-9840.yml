@@ -1,10 +1,10 @@
-name: Runtime cache diagnostic 9840 (Jac 0.34.21)
+name: Unchanged Builder registry ownership observer (Jac 0.34.21)
 
 on:
   push:
     branches: [diagnostics/9840-runtime-cache-03420]
     paths:
-      - diagnostics/9840/**
+      - diagnostics/registry-owner/**
       - .github/workflows/runtime-cache-9840.yml
 
 permissions:
@@ -15,9 +15,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  pinned-runtime-contract:
+  registry-owner-observer:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 18
     services:
       mongodb:
         image: mongo:7
@@ -42,67 +42,77 @@ jobs:
       JAC_NO_DEV_SOURCE: "1"
       PYTHONUNBUFFERED: "1"
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout isolated diagnostic
+        uses: actions/checkout@v4
         with:
-          sparse-checkout: diagnostics/9840
-      - name: Prepare independent fixture and pinned official runtime
-        id: runtime_setup
+          path: diagnostic
+          sparse-checkout: diagnostics/registry-owner
+      - name: Checkout exact unchanged Builder source
+        uses: actions/checkout@v4
+        with:
+          repository: jaseci-labs/jacBuilder
+          ref: 693b7596e7c144852b37997aece30b2cbf0b61c5
+          path: builder
+          persist-credentials: false
+      - name: Prepare pinned official runtime and source witnesses
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/runtime-cache-9840"
-          cp diagnostics/9840/*.jac "$RUNNER_TEMP/runtime-cache-9840/"
+          mkdir -p "$RUNNER_TEMP/registry-owner-evidence" "$RUNNER_TEMP/registry-owner-bin"
           curl --fail --location --retry 3 --max-time 120 \
             https://github.com/jaseci-labs/jac/releases/download/v0.34.21/jac-0.34.21-linux-x86_64 \
-            --output "$RUNNER_TEMP/runtime-cache-9840/jac"
-          cd "$RUNNER_TEMP/runtime-cache-9840"
+            --output "$RUNNER_TEMP/registry-owner-bin/jac"
+          cd "$RUNNER_TEMP/registry-owner-bin"
           echo '36fdb2c29f43fbcbb938be6649bb40ec362de0530ac62ff7d9e027dcbf255027  jac' | sha256sum --check
           chmod +x jac
+          echo "$RUNNER_TEMP/registry-owner-bin" >> "$GITHUB_PATH"
           {
-            echo "workflow_commit=${{ github.sha }}"
+            echo "diagnostic_commit=${{ github.sha }}"
             echo 'runtime_source_commit=3b8b97b889a74ee48fc00839fc64976c3c7a07e3'
-            sha256sum jac *.jac
+            sha256sum jac "$GITHUB_WORKSPACE/diagnostic/diagnostics/registry-owner/observe_registry_owner.jac"
             timeout 180 ./jac --version
-          } | tee versions.log
-          timeout 120 ./jac -m pip install --only-binary=:all: pymongo==4.18.2 redis==6.4.0
-          ./jac -m pip show pymongo redis >> versions.log
-      - name: Check diagnostic fixture
+            cd "$GITHUB_WORKSPACE/builder"
+            test "$(git rev-parse HEAD)" = 693b7596e7c144852b37997aece30b2cbf0b61c5
+            echo 'builder_commit=693b7596e7c144852b37997aece30b2cbf0b61c5'
+            echo 'a4ff564d5f418269684ab6a1887e1e28335315f9277218a5634f50c12a7e441e  tests/jachammer/coder_root_walk_test.jac' | sha256sum --check
+          } | tee "$RUNNER_TEMP/registry-owner-evidence/versions.log"
+      - name: Install Bun for unchanged Builder dependency configuration
+        uses: oven-sh/setup-bun@v2
+      - name: Install unchanged Builder dependencies
+        working-directory: builder
         shell: bash
         run: |
           set -euo pipefail
-          cd "$RUNNER_TEMP/runtime-cache-9840"
-          timeout 120 ./jac check cache_consistency_test.jac 2>&1 | tee check.log
-      - name: Run independent upstream cache contract scenarios
+          timeout 600 jac install 2>&1 | tee "$RUNNER_TEMP/registry-owner-evidence/dependency-setup.log"
+          jac -m pip show pymongo redis >> "$RUNNER_TEMP/registry-owner-evidence/versions.log"
+      - name: Check independent observer
+        working-directory: builder
         shell: bash
         run: |
           set -euo pipefail
-          cd "$RUNNER_TEMP/runtime-cache-9840"
-          timeout 180 ./jac test cache_consistency_test.jac -v 2>&1 | tee runtime-cache-diagnostic.log
-      - name: Check ordinary Mongo commit-failure diagnostic
-        if: ${{ !cancelled() && steps.runtime_setup.outcome == 'success' }}
-        id: commit_failure_check
+          cp ../diagnostic/diagnostics/registry-owner/observe_registry_owner.jac registry_owner_observer.jac
+          timeout 120 jac check registry_owner_observer.jac 2>&1 | tee "$RUNNER_TEMP/registry-owner-evidence/check.log"
+      - name: Run unchanged registry file once with delegating owner observer
+        working-directory: builder
         shell: bash
         run: |
           set -euo pipefail
-          cd "$RUNNER_TEMP/runtime-cache-9840"
-          timeout 120 ./jac check runtime_commit_failure_test.jac 2>&1 | tee commit-failure-check.log
-      - name: Run separate ordinary Mongo commit-failure contract
-        if: ${{ !cancelled() && steps.commit_failure_check.outcome == 'success' }}
+          timeout 240 jac run registry_owner_observer.jac 2>&1 | tee "$RUNNER_TEMP/registry-owner-evidence/registry-owner-observer.log"
+      - name: Verify Builder tracked files and frozen fixture remain unchanged
+        if: always()
+        working-directory: builder
         shell: bash
         run: |
           set -euo pipefail
-          cd "$RUNNER_TEMP/runtime-cache-9840"
-          timeout 180 ./jac test runtime_commit_failure_test.jac -v 2>&1 | tee runtime-commit-failure.log
+          {
+            git diff --exit-code
+            echo 'a4ff564d5f418269684ab6a1887e1e28335315f9277218a5634f50c12a7e441e  tests/jachammer/coder_root_walk_test.jac' | sha256sum --check
+          } | tee "$RUNNER_TEMP/registry-owner-evidence/source-integrity.log"
       - name: Preserve bounded diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: runtime-cache-9840-jac-0.34.21-${{ github.sha }}
-          path: |
-            ${{ runner.temp }}/runtime-cache-9840/versions.log
-            ${{ runner.temp }}/runtime-cache-9840/check.log
-            ${{ runner.temp }}/runtime-cache-9840/runtime-cache-diagnostic.log
-            ${{ runner.temp }}/runtime-cache-9840/commit-failure-check.log
-            ${{ runner.temp }}/runtime-cache-9840/runtime-commit-failure.log
+          name: registry-owner-observer-jac-0.34.21-${{ github.sha }}
+          path: ${{ runner.temp }}/registry-owner-evidence/*.log
           if-no-files-found: warn
           retention-days: 14
