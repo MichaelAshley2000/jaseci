@@ -1,0 +1,90 @@
+name: Runtime cache diagnostic 9840
+
+on:
+  push:
+    branches: [diagnostics/9840-runtime-cache-03420]
+    paths:
+      - diagnostics/9840/**
+      - .github/workflows/runtime-cache-9840.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-cache-9840-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pinned-runtime-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      mongodb:
+        image: mongo:7
+        ports: [27017:27017]
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      redis:
+        image: redis:7
+        ports: [6379:6379]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      MONGODB_URI: mongodb://localhost:27017
+      REDIS_URL: redis://localhost:6379
+      JAC_TEST_NATIVE: "1"
+      JAC_NO_DEV_SOURCE: "1"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: diagnostics/9840
+      - name: Prepare independent fixture and pinned official runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/runtime-cache-9840"
+          cp diagnostics/9840/cache_consistency_test.jac "$RUNNER_TEMP/runtime-cache-9840/"
+          curl --fail --location --retry 3 --max-time 120 \
+            https://github.com/jaseci-labs/jac/releases/download/v0.34.20/jac-0.34.20-linux-x86_64 \
+            --output "$RUNNER_TEMP/runtime-cache-9840/jac"
+          cd "$RUNNER_TEMP/runtime-cache-9840"
+          echo '3d9f166c6c40a379d1b3d690448891c1971f07658dc52e34e8926a77670462dd  jac' | sha256sum --check
+          chmod +x jac
+          {
+            echo "workflow_commit=${{ github.sha }}"
+            echo 'runtime_source_commit=38b1c17d35a3f7214615ab1fc391b229c56de1dc'
+            sha256sum jac cache_consistency_test.jac
+            timeout 180 ./jac --version
+          } | tee versions.log
+          timeout 120 ./jac -m pip install pymongo==4.14.1 redis==6.4.0
+          ./jac -m pip show pymongo redis >> versions.log
+      - name: Check diagnostic fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/runtime-cache-9840"
+          timeout 120 ./jac check cache_consistency_test.jac 2>&1 | tee check.log
+      - name: Run independent upstream cache contract scenarios
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/runtime-cache-9840"
+          timeout 180 ./jac test cache_consistency_test.jac -v 2>&1 | tee runtime-cache-diagnostic.log
+      - name: Preserve bounded diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-cache-9840-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/runtime-cache-9840/versions.log
+            ${{ runner.temp }}/runtime-cache-9840/check.log
+            ${{ runner.temp }}/runtime-cache-9840/runtime-cache-diagnostic.log
+          if-no-files-found: warn
+          retention-days: 14
