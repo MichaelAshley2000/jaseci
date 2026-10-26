@@ -937,7 +937,7 @@ impl JacAPIServer.postinit -> None {
     self.execution_manager = ExecutionManager(
         base_path=self.base_path, user_manager=self.user_manager
     );
-    self.scheduler = Scheduler.instance();
+    self.scheduler = Scheduler();
     self.drain = DrainState(timeout=self.settings.timeouts.drain);
     self.scheduler.drain = self.drain;
     if self.extensions is None {
@@ -1455,6 +1455,9 @@ impl JacAPIServer._prepare_to_serve(dev: bool, no_client: bool) -> ServeSettings
     }
     self._ensure_internal_users();
     self._ensure_client_bundle();
+    # An earlier transport must retain its own drain state during late cleanup.
+    self.drain = DrainState(timeout=settings.timeouts.drain);
+    self.scheduler.drain = self.drain;
     self.build_app();
     self._register_scheduled_tasks();
     return settings;
@@ -1482,7 +1485,7 @@ impl JacAPIServer.serve_background(
     bridge_owner = object();
     def _stop_services {
         try {
-            self.scheduler.stop(timeout=self.drain.remaining());
+            self.scheduler.stop(timeout=serving.drain.remaining());
         } finally {
             stop_worker(owner=bridge_owner);
         }
@@ -1599,7 +1602,7 @@ impl JacAPIServer._worker_main(
         return serving.run(on_ready=_ready, port_retries=port_retries);
     } finally {
         try {
-            self.scheduler.stop(timeout=self.drain.remaining());
+            self.scheduler.stop(timeout=serving.drain.remaining());
         } finally {
             stop_worker(owner=bridge_owner);
         }
