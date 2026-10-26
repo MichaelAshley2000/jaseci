@@ -289,6 +289,7 @@ test "serve_background binds loopback on an ephemeral port and serves a client_d
     Jac.set_base_path(tmp);
     Jac.set_context(Jac.create_j_context(user_root=None));
     stop: any = None;
+    retry_stop: any = None;
     try {
         set_config(None);
         Jac.set_full_target_path(os.path.join(tmp, "web", "main.jac"));
@@ -324,7 +325,32 @@ test "serve_background binds loopback on an ephemeral port and serves a client_d
         assert code == 200 and "hello loopback" in body , (code, body);
         (code, body) = _post(f"{origin}/api/web/walker/Hello", {"who": "routed"});
         assert code == 200 and "hello routed" in body , (code, body);
+
+        with socket.socket() as occupied {
+            occupied.bind(("127.0.0.1", 0));
+            occupied.listen();
+            port = occupied.getsockname()[1];
+            dist = settings.client_dist;
+            retry_cfg = ServeSettings.load(
+                base, {"host": "127.0.0.1", "port": port, "client_dist": dist}
+            );
+            retry_srv = JacAPIServer(
+                module_name="main", base_path=base, settings=retry_cfg, extensions=[]
+            );
+            assert isinstance(_startup_error(retry_srv), PortInUseError);
+            failed_drain = retry_srv.drain;
+        }
+        retry_stop = retry_srv.serve_background(port_retries=0);
+        asset = f"http://127.0.0.1:{retry_srv.port}/assets/app.js";
+        (code, body) = _get(asset);
+        assert code == 200 and "hosted" in body , (code, body);
+        failed_drain.start("late cleanup");
+        (code, body) = _get(asset);
+        assert code == 200 and "hosted" in body , (code, body);
     } finally {
+        if retry_stop is not None {
+            retry_stop();
+        }
         if stop is not None {
             stop();
         }
@@ -364,53 +390,6 @@ test "prepare_inprocess_runtime colocates the workspace's service apps" {
             runtime.close();
         }
         _reset(tmp);
-    }
-}
-
-
-test "API bind failure can retry without inheriting or sharing the failed drain" {
-    prior_runtime = os.environ.get("JAC_SCALE_RUNTIME");
-    os.environ["JAC_SCALE_RUNTIME"] = "1";
-    tmp = _workspace();
-    Jac.set_base_path(tmp);
-    Jac.set_context(Jac.create_j_context(user_root=None));
-    stop: any = None;
-    try {
-        set_config(None);
-        Jac.set_full_target_path(os.path.join(tmp, "web", "main.jac"));
-        sv_client.set_consumer_app("web");
-        base = os.path.join(tmp, "web");
-        _load(tmp, "main", base);
-        with socket.socket() as occupied {
-            occupied.bind(("127.0.0.1", 0));
-            occupied.listen();
-            port = occupied.getsockname()[1];
-            settings = ServeSettings.load(
-                base, {"host": "127.0.0.1", "port": port, "client_dist": _dist(tmp)}
-            );
-            srv = JacAPIServer(
-                module_name="main", base_path=base, settings=settings, extensions=[]
-            );
-            assert isinstance(_startup_error(srv), PortInUseError);
-            failed_drain = srv.drain;
-        }
-        stop = srv.serve_background(port_retries=0);
-        asset = f"http://127.0.0.1:{srv.port}/assets/app.js";
-        (code, body) = _get(asset);
-        assert code == 200 and "hosted" in body , (code, body);
-        failed_drain.start("late cleanup");
-        (code, body) = _get(asset);
-        assert code == 200 and "hosted" in body , (code, body);
-    } finally {
-        if stop is not None {
-            stop();
-        }
-        _reset(tmp);
-        if prior_runtime is None {
-            os.environ.pop("JAC_SCALE_RUNTIME", None);
-        } else {
-            os.environ["JAC_SCALE_RUNTIME"] = prior_runtime;
-        }
     }
 }
 
