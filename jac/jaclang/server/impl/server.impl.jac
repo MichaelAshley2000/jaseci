@@ -1455,7 +1455,7 @@ impl JacAPIServer._prepare_to_serve(dev: bool, no_client: bool) -> ServeSettings
     }
     self._ensure_internal_users();
     self._ensure_client_bundle();
-    # An earlier transport must retain its own drain state during late cleanup.
+
     self.drain = DrainState(timeout=settings.timeouts.drain);
     self.scheduler.drain = self.drain;
     self.build_app();
