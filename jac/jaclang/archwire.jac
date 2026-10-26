@@ -31496,6 +31496,7 @@ graph import scale {
     }
     scheduler.scheduler ++> [
         server.jobs_ext { JacScaleScheduler, TriggerSpec },
+        tests.server.test_host_serving { JacScaleScheduler },
         tests.server.test_pg_job_store { PgJobStore },
         tests.server.test_scheduler_endpoints { MemoryJobStore, TriggerSpec },
         tests.server.test_scheduler_multipod {

@@ -456,6 +456,10 @@ test "a failed API startup preserves a running peer's scheduler and recurring ti
                 tick.clear();
                 assert tick.`wait(2) , "failed peer stopped recurring work";
             }
+            jobs = JacScaleScheduler();
+            jobs._server = a;
+            jobs.stop();
+            assert not worker.is_alive() , "shutdown left the owned scheduler running";
         }
     } finally {
         if stop is not None {
