@@ -437,6 +437,7 @@ test "a failed API startup preserves a running peer's scheduler and recurring ti
             }
             assert tick.`wait(2) , "the first API's scheduled task never ran";
             worker = a.scheduler._thread;
+            assert worker is not None;
             with socket.socket() as occupied {
                 occupied.bind(("127.0.0.1", 0));
                 occupied.listen();

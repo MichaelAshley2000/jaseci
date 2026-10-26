@@ -4198,8 +4198,8 @@ graph import {
     server.task_scheduler ++> [
         runtime.builtin.schedule { ScheduleSpec },
         scale.scheduler.scheduler { Scheduler, schedule_namespace, tick_of },
-        scale.tests.server.test_scheduler_multipod { ScheduleSpec, Scheduler, tick_of },
         scale.tests.server.test_host_serving { ScheduleSpec, Scheduler },
+        scale.tests.server.test_scheduler_multipod { ScheduleSpec, Scheduler, tick_of },
     ]
     server.transport ++> [
         scale.admin.admin_portal
