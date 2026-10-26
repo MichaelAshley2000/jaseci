@@ -4199,6 +4199,7 @@ graph import {
         runtime.builtin.schedule { ScheduleSpec },
         scale.scheduler.scheduler { Scheduler, schedule_namespace, tick_of },
         scale.tests.server.test_scheduler_multipod { ScheduleSpec, Scheduler, tick_of },
+        scale.tests.server.test_host_serving { ScheduleSpec, Scheduler },
     ]
     server.transport ++> [
         scale.admin.admin_portal
