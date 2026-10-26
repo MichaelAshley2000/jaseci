@@ -290,6 +290,10 @@ test "serve_background binds loopback on an ephemeral port and serves a client_d
     Jac.set_context(Jac.create_j_context(user_root=None));
     stop: any = None;
     retry_stop: any = None;
+    isolated = Scheduler();
+    tick = threading.Event();
+    factory = patch.object(Scheduler, "instance", return_value=isolated);
+    factory.start();
     try {
         set_config(None);
         Jac.set_full_target_path(os.path.join(tmp, "web", "main.jac"));
@@ -303,6 +307,8 @@ test "serve_background binds loopback on an ephemeral port and serves a client_d
         srv = JacAPIServer(
             module_name="main", port=0, base_path=base, settings=settings, extensions=[]
         );
+        spec = ScheduleSpec(interval=0.05);
+        srv.scheduler.register("tick", lambda { tick.set(); }, spec, is_walker=False);
         seen: list[int] = [];
         stop = srv.serve_background(on_ready=lambda (p: int) { seen.append(p); });
         assert seen and seen[0] > 0 , seen;
@@ -326,6 +332,9 @@ test "serve_background binds loopback on an ephemeral port and serves a client_d
         (code, body) = _post(f"{origin}/api/web/walker/Hello", {"who": "routed"});
         assert code == 200 and "hello routed" in body , (code, body);
 
+        assert tick.`wait(2) , "the first API's scheduled task never ran";
+        worker = srv.scheduler._thread;
+        assert worker is not None;
         with socket.socket() as occupied {
             occupied.bind(("127.0.0.1", 0));
             occupied.listen();
@@ -340,14 +349,25 @@ test "serve_background binds loopback on an ephemeral port and serves a client_d
             assert isinstance(_startup_error(retry_srv), PortInUseError);
             failed_drain = retry_srv.drain;
         }
+        peer_ok = [srv.scheduler._thread is worker and worker.is_alive()];
+        for _ in range(2) {
+            tick.clear();
+            peer_ok.append(tick.`wait(2));
+        }
         retry_stop = retry_srv.serve_background(port_retries=0);
         asset = f"http://127.0.0.1:{retry_srv.port}/assets/app.js";
         (code, body) = _get(asset);
-        assert code == 200 and "hosted" in body , (code, body);
+        assert all(peer_ok) and code == 200 and "hosted" in body , (peer_ok, code);
         failed_drain.start("late cleanup");
         (code, body) = _get(asset);
         assert code == 200 and "hosted" in body , (code, body);
+        jobs = JacScaleScheduler();
+        jobs._server = srv;
+        jobs.stop();
+        assert not worker.is_alive() , "shutdown left the owned scheduler running";
     } finally {
+        factory.stop();
+        isolated.stop(timeout=1);
         if retry_stop is not None {
             retry_stop();
         }
@@ -389,63 +409,6 @@ test "prepare_inprocess_runtime colocates the workspace's service apps" {
         if runtime is not None {
             runtime.close();
         }
-        _reset(tmp);
-    }
-}
-
-
-test "a failed API startup preserves a running peer's scheduler and recurring ticks" {
-    import from jaclang.server.task_scheduler { ScheduleSpec, Scheduler }
-    tmp = _workspace();
-    Jac.set_base_path(tmp);
-    Jac.set_context(Jac.create_j_context(user_root=None));
-    isolated = Scheduler();
-    tick = threading.Event();
-    stop: any = None;
-    try {
-        with patch.object(Scheduler, "instance", return_value=isolated) {
-            settings = ServeSettings.load(tmp, {"host": "127.0.0.1", "port": 0});
-            a = JacAPIServer(
-                module_name="main", base_path=tmp, settings=settings, extensions=[]
-            );
-            a.app = ServingApp();
-            spec = ScheduleSpec(interval=0.05);
-            a.scheduler.register("tick", lambda { tick.set(); }, spec, is_walker=False);
-            with patch.object(a, "_prepare_to_serve", return_value=settings) {
-                stop = a.serve_background(port_retries=0);
-            }
-            assert tick.`wait(2) , "the first API's scheduled task never ran";
-            worker = a.scheduler._thread;
-            assert worker is not None;
-            with socket.socket() as occupied {
-                occupied.bind(("127.0.0.1", 0));
-                occupied.listen();
-                failed = ServeSettings.load(
-                    tmp, {"host": "127.0.0.1", "port": occupied.getsockname()[1]}
-                );
-                b = JacAPIServer(
-                    module_name="main", base_path=tmp, settings=failed, extensions=[]
-                );
-                b.app = ServingApp();
-                with patch.object(b, "_prepare_to_serve", return_value=failed) {
-                    assert isinstance(_startup_error(b), PortInUseError);
-                }
-            }
-            assert a.scheduler._thread is worker and worker.is_alive();
-            for _ in range(2) {
-                tick.clear();
-                assert tick.`wait(2) , "failed peer stopped recurring work";
-            }
-            jobs = JacScaleScheduler();
-            jobs._server = a;
-            jobs.stop();
-            assert not worker.is_alive() , "shutdown left the owned scheduler running";
-        }
-    } finally {
-        if stop is not None {
-            stop();
-        }
-        isolated.stop(timeout=1);
         _reset(tmp);
     }
 }
