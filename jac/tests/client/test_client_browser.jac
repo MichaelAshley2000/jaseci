@@ -13,7 +13,9 @@ Each test scaffolds the fixture into a temp dir, `jac run --serve`s it, and driv
 headless Chromium. Skips cleanly when Playwright/Chromium is unavailable.
 """
 
+import json;
 import time;
+import from pathlib { Path }
 import from subprocess { Popen }
 import from tempfile { TemporaryDirectory }
 
@@ -68,6 +70,198 @@ def _wait_for_count(
         page.wait_for_timeout(250);
     }
     return len(requests);
+}
+
+"""A first HMR connection catches an edit published after its document loaded."""
+test "initial HMR connection catches up an edit made before it subscribes" {
+    sync_playwright = _require_playwright();
+    with TemporaryDirectory() as temp_dir {
+        project_path = copy_fixture("fullstack", temp_dir);
+        source = Path(project_path) / "main.jac";
+        initial_marker = "hmr-before-subscription";
+        updated_marker = "hmr-after-subscription";
+        initial_source = (
+            'def:pub app() -> JsxElement {\n'
+            '    return <main>{"hmr-before-subscription"}</main>;\n'
+            '}\n'
+        );
+        source.write_text(initial_source, encoding="utf-8");
+        server: Popen | None = None;
+        try {
+            (server, port) = start_app_server(project_path, extra_args=["--dev"]);
+            base = f"http://127.0.0.1:{port}";
+            with sync_playwright() as p {
+                browser = p.chromium.launch(headless=True);
+                try {
+                    witness = browser.new_context().new_page();
+                    witness_frames: list[any] = [];
+                    witness_changes: list[any] = [];
+                    completed_builds: list[any] = [];
+                    witness_faults: list[str] = [];
+                    witness.on(
+                        "close",
+                        lambda { witness_faults.append("observer page closed"); }
+                    );
+                    browser.on(
+                        "disconnected",
+                        lambda { witness_faults.append("browser disconnected"); }
+                    );
+                    def observe_socket(socket: any) {
+                        try {
+                            upstream = socket.connect_to_server();
+                        } except Exception as exc {
+                            witness_faults.append("connect:" + type(exc).__name__);
+                            socket.close();
+                            return;
+                        }
+                        def forward_close(peer: any, code: any, reason: any) {
+                            witness_faults.append("observer socket closed");
+                            try {
+                                peer.close(code=code, reason=reason);
+                            } except Exception as exc {
+                                witness_faults.append("close:" + type(exc).__name__);
+                            }
+                        }
+                        def observe_message(payload: any) {
+                            try {
+                                message = json.loads(payload);
+                                witness_frames.append(message);
+                                if message.get("type") == "error" {
+                                    witness_faults.append("server error frame");
+                                }
+                                if message.get("type") in ("update", "full-reload") {
+                                    witness_changes.append(message);
+                                    if message.get("type") == "full-reload"
+                                        and message.get("jacTriggered") is True {
+                                        completed_builds.append(message);
+                                    }
+                                } else {
+                                    socket.send(payload);
+                                }
+                            } except Exception as exc {
+                                witness_faults.append("frame:" + type(exc).__name__);
+                            }
+                        }
+                        # Keep this real connection alive across the edit; the
+                        # witness observes changes without applying or reloading.
+                        upstream.on_message(observe_message);
+                        socket.on_close(
+                            lambda (code: any, reason: any) { forward_close(
+                                upstream, code, reason
+                            ); }
+                        );
+                        upstream.on_close(
+                            lambda (code: any, reason: any) { forward_close(
+                                socket, code, reason
+                            ); }
+                        );
+                    }
+                    witness.route_web_socket("**/*", observe_socket);
+                    try {
+                        _goto(witness, base, "/");
+                        witness.get_by_text(initial_marker, exact=True).wait_for();
+                        _wait_for_count(witness, witness_frames, 1);
+                    } finally {
+                        assert not witness_faults , f"invalid HMR witness: {witness_faults}";
+                    }
+                    assert `any(f.get("type") == "connected" for f in witness_frames) , (
+                        "the witness must receive the real HMR connection handshake"
+                    );
+
+                    page = browser.new_context().new_page();
+                    gate: dict[str, any] = {
+                        "held": False,
+                        "released": False,
+                        "premature_connections": 0,
+                        "verified": False,
+                        "error": "",
+                        "broadcasts_before_join": 0
+                    };
+                    def hold_first_connection(socket: any) {
+                        if gate["released"] {
+                            socket.connect_to_server();
+                            return;
+                        }
+                        if gate["held"] {
+                            gate["premature_connections"] += 1;
+                            socket.close(code=1008, reason="initial HMR join is held");
+                            return;
+                        }
+                        gate["held"] = True;
+                        try {
+                            page.get_by_text(initial_marker, exact=True).wait_for();
+                            # Observe the actual completed-build broadcast elsewhere;
+                            # a compiled file alone does not prove it preceded the join.
+                            source.write_text(
+                                initial_source.replace(initial_marker, updated_marker),
+                                encoding="utf-8",
+                            );
+                            deadline = time.monotonic() + 60.0;
+                            while not completed_builds
+                                and not witness_faults
+                                and not gate["premature_connections"]
+                                and time.monotonic() < deadline {
+                                witness.wait_for_timeout(250);
+                            }
+                            assert completed_builds , (
+                                "the witness must receive the completed-build reload before the join"
+                            );
+                            compiled = Path(project_path)
+                                / ".jac"
+                                / "client"
+                                / "compiled"
+                                / "main.js";
+                            assert updated_marker
+                                in compiled.read_text(encoding="utf-8") , (
+                                "the completed build must contain the edited marker"
+                            );
+                            gate["verified"] = True;
+                            gate["broadcasts_before_join"] = len(witness_changes);
+                            print(
+                                "HMR catch-up: old DOM loaded; compiled edit and real reload broadcast preceded the first connection"
+                            );
+                        } except Exception as exc {
+                            gate["error"] = type(exc).__name__;
+                        } finally {
+                            # Returning without this call opens a mock socket in the page.
+                            gate["released"] = True;
+                            socket.connect_to_server();
+                        }
+                    }
+                    page.route_web_socket("**/*", hold_first_connection);
+                    _goto(page, base, "/");
+                    assert not gate["premature_connections"] , (
+                        "invalid initial-join scenario: another connection attempted to bypass the hold"
+                    );
+                    assert not witness_faults , f"invalid HMR witness: {witness_faults}";
+                    assert gate["verified"] , gate["error"]
+                        or "the HMR join was not held";
+                    try {
+                        page.get_by_text(updated_marker, exact=True).wait_for(
+                            timeout=30000
+                        );
+                        assert page.get_by_text(initial_marker, exact=True).count()
+                            == 0;
+                    } finally {
+                        # Bounded observation, not proof against arbitrarily late events.
+                        try {
+                            witness.wait_for_timeout(1000);
+                        } except Exception as exc {
+                            witness_faults.append("drain:" + type(exc).__name__);
+                        }
+                        assert not witness_faults , f"invalid HMR witness: {witness_faults}";
+                        assert len(witness_changes) == gate["broadcasts_before_join"] , (
+                            "a later shared HMR broadcast invalidated the isolated initial-join scenario"
+                        );
+                    }
+                } finally {
+                    browser.close();
+                }
+            }
+        } finally {
+            stop_server(server);
+        }
+    }
 }
 
 """A reader is fetched once then served from cache; a write invalidates it."""
